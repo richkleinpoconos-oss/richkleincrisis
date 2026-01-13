@@ -1,0 +1,7 @@
+{
+  "name": "Rich Klein Crisis Management Voice Agent",
+  "description": "A calm and professional voice assistant designed to help organizations manage crises in real-time.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
