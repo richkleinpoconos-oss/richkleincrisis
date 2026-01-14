@@ -26,13 +26,14 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const chatEndRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
 
-  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How confident are you now that this will work?";
+  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How can I assist with your strategic situation today?";
 
   const SYSTEM_INSTRUCTION = useMemo(() => `
 Identity: You are the AI Crisis Strategist for Rich Klein Crisis Management.
+Role: Provide immediate, high-level strategic counsel for active reputation and business crises.
 Tone: Calm, professional, elite, and highly strategic. Respond in the user's language.
-Knowledge: Rich Klein has 40 years of experience in PR and Journalism.
-Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure assessment."
+Background: Based on 40 years of combined Journalism and PR experience by Rich Klein.
+Protocol: For highly sensitive matters, always state: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure, confidential assessment."
 `, []);
 
   const stopAllAudio = useCallback(() => {
@@ -52,7 +53,7 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
 
   const playTTS = useCallback(async (text: string) => {
     const apiKey = process.env.API_KEY;
-    if (!audioOutputEnabled || !apiKey || apiKey === 'undefined') return;
+    if (!audioOutputEnabled || !apiKey) return;
     
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -84,7 +85,7 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
         sourcesRef.current.add(source);
       }
     } catch (e) { 
-      console.error("Audio playback error:", e);
+      console.error("Audio engine fallback:", e);
       setStatus('listening');
     }
   }, [audioOutputEnabled, resumeAudio]);
@@ -95,33 +96,34 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
 
     const apiKey = process.env.API_KEY;
     
-    // 1. Immediate UI Setup
+    // Initial UI state
     setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
 
-    // 2. Critical Engine Initialization (No Await on Mic yet)
-    if (apiKey && apiKey !== 'undefined') {
+    if (apiKey) {
       const ai = new GoogleGenAI({ apiKey });
+      
+      // Initialize Chat Engine
       chatRef.current = ai.chats.create({ 
         model: 'gemini-3-pro-preview', 
         config: { systemInstruction: SYSTEM_INSTRUCTION } 
       });
       
-      // Setup audio contexts immediately
-      if (!audioContextInRef.current) audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
-      if (!audioContextOutRef.current) audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
+      // Initialize Audio Contexts
+      audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
+      audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
 
-      // Try to play initial greeting TTS
+      // Play Greeting TTS
       playTTS(WELCOME_TEXT);
 
-      // 3. Background Async Voice Session (Mic Request)
-      const setupLiveSession = async () => {
+      // Start Background Voice Session if Mic is preferred
+      const startLive = async () => {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           streamRef.current = stream;
           const sessionPromise = ai.live.connect({
             model: 'gemini-2.5-flash-native-audio-preview-12-2025',
             callbacks: {
-              onopen: () => console.log("Voice line secured."),
+              onopen: () => console.log("Secure line established."),
               onmessage: async (message: LiveServerMessage) => {
                 if (message.serverContent?.interrupted) stopAllAudio();
                 const base64Audio = message.serverContent?.modelTurn?.parts?.find(p => p.inlineData)?.inlineData?.data;
@@ -147,20 +149,18 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
           });
           sessionRef.current = await sessionPromise;
         } catch (e) {
-          console.warn("Microphone not available, tactical chat mode active.");
+          console.warn("Secure voice line unavailable. Message-only mode active.");
         }
       };
 
-      setupLiveSession();
-    } else {
-      setTranscriptions(prev => [...prev, { text: "[SYSTEM ERROR: Strategic line connection unavailable. Please check API Key configuration.]", type: 'model', timestamp: Date.now() }]);
+      if (micEnabled) startLive();
     }
 
     return () => {
       sessionRef.current?.close();
       streamRef.current?.getTracks().forEach(t => t.stop());
     };
-  }, [SYSTEM_INSTRUCTION, WELCOME_TEXT, stopAllAudio, audioOutputEnabled, playTTS]);
+  }, [SYSTEM_INSTRUCTION, WELCOME_TEXT, stopAllAudio, audioOutputEnabled, playTTS, micEnabled]);
 
   useEffect(() => { 
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -170,16 +170,14 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
     const msg = textInput.trim();
     if (!msg) return;
 
-    // Explicitly resume audio on first user action to bypass browser policies
     await resumeAudio();
-    
     setTranscriptions(prev => [...prev, { text: msg, type: 'user', timestamp: Date.now() }]);
     setTextInput('');
     stopAllAudio();
     setStatus('speaking');
 
     if (!chatRef.current) {
-      setTranscriptions(prev => [...prev, { text: "Strategic advisor line is offline or still initializing. If this persists, check your connection.", type: 'model', timestamp: Date.now() }]);
+      setTranscriptions(prev => [...prev, { text: "Strategic line offline. Please check your credentials.", type: 'model', timestamp: Date.now() }]);
       setStatus('listening');
       return;
     }
@@ -195,14 +193,13 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
       setStreamingResponse('');
       playTTS(fullText);
     } catch (e) { 
-      console.error("Chat failure:", e);
-      setTranscriptions(prev => [...prev, { text: "Tactical communication interrupted. Please check your network and try again.", type: 'model', timestamp: Date.now() }]);
+      console.error("Chat engine failure:", e);
       setStatus('listening'); 
     }
   };
 
   return (
-    <div className="w-full flex flex-col h-[75vh] glass rounded-[2.5rem] overflow-hidden shadow-2xl border border-white/10">
+    <div className="w-full flex flex-col h-[75vh] glass rounded-[2.5rem] overflow-hidden shadow-2xl border border-white/10 animate-in fade-in zoom-in-95 duration-500">
       <div className="p-5 border-b border-white/5 flex items-center justify-between bg-slate-800/20">
         <div className="flex items-center gap-3">
           <div className={`w-2.5 h-2.5 rounded-full ${status === 'speaking' ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500'}`} />
@@ -231,7 +228,7 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
         ))}
         {streamingResponse && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800 border border-white/5 italic text-blue-200">
+            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800 border border-white/5 italic text-blue-200 animate-pulse">
               {streamingResponse}
             </div>
           </div>
@@ -250,7 +247,7 @@ Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Ple
         <button 
           onClick={handleSendText} 
           disabled={!textInput.trim() || !!streamingResponse}
-          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-30 transition-all shadow-lg shadow-blue-600/20 text-white"
+          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-30 transition-all shadow-lg shadow-blue-600/20"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         </button>
