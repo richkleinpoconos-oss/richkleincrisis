@@ -9,7 +9,7 @@ interface VoiceAgentProps {
 }
 
 export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode }) => {
-  const [status, setStatus] = useState<'connecting' | 'listening' | 'speaking'>('connecting');
+  const [status, setStatus] = useState<'connecting' | 'listening' | 'speaking'>('listening');
   const [micEnabled, setMicEnabled] = useState(preferredMode === 'voice');
   const [audioOutputEnabled, setAudioOutputEnabled] = useState(true);
   const [transcriptions, setTranscriptions] = useState<Transcription[]>([]);
@@ -26,14 +26,14 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const chatEndRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
 
-  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. I am your strategic advisor. How can I assist with your situation today?";
+  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How can I assist with your strategic situation today?";
 
   const SYSTEM_INSTRUCTION = useMemo(() => `
 Identity: You are the AI Crisis Strategist for Rich Klein Crisis Management.
-Tone: Calm, professional, elite, and highly strategic. Respond in the language used by the user.
-Knowledge: Rich Klein has 40 years of experience in PR and Journalism. He splits his time between Pennsylvania and Italy.
-Core Principles: "Organizations that survive crises with their reputations intact are those that treated 'Before' as seriously as 'During.'"
-Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure assessment."
+Tone: Calm, professional, elite, and highly strategic.
+Knowledge: Rich Klein has 40 years of experience in PR and Journalism.
+Core Mission: Provide immediate, high-level strategic advice for active crises.
+Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure assessment."
 `, []);
 
   const stopAllAudio = useCallback(() => {
@@ -85,8 +85,8 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
         sourcesRef.current.add(source);
       }
     } catch (e) { 
-      console.error("TTS Failed:", e); 
-      setStatus('listening'); 
+      console.error("Audio engine fallback:", e);
+      setStatus('listening');
     }
   }, [audioOutputEnabled, resumeAudio]);
 
@@ -94,29 +94,28 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
     if (hasInitializedRef.current) return;
     hasInitializedRef.current = true;
 
-    const init = async () => {
+    const startApp = async () => {
       const apiKey = process.env.API_KEY;
-      if (!apiKey) {
-        setStatus('listening');
-        setTranscriptions([{ text: "System Error: Strategic line unavailable (Missing Credentials).", type: 'model', timestamp: Date.now() }]);
-        return;
-      }
+      
+      // Unlock UI immediately
+      setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
+      setStatus('listening');
+
+      if (!apiKey) return;
 
       const ai = new GoogleGenAI({ apiKey });
-
-      // 1. Setup Chat Engine (Fast)
+      
+      // 1. Warm up the chat engine
       chatRef.current = ai.chats.create({ 
         model: 'gemini-3-flash-preview', 
         config: { systemInstruction: SYSTEM_INSTRUCTION } 
       });
 
-      // 2. Setup Audio Contexts
-      if (!audioContextInRef.current) audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
-      if (!audioContextOutRef.current) audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
+      // 2. Prepare audio contexts
+      audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
+      audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
 
-      // 3. Welcome Sequence
-      setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
-      setStatus('listening');
+      // 3. Play Greeting
       playTTS(WELCOME_TEXT);
 
       // 4. Background Voice Session
@@ -127,18 +126,7 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
         const sessionPromise = ai.live.connect({
           model: 'gemini-2.5-flash-native-audio-preview-12-2025',
           callbacks: {
-            onopen: () => {
-              console.log("Voice channel connected.");
-              const source = audioContextInRef.current!.createMediaStreamSource(stream);
-              const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
-              scriptProcessor.onaudioprocess = (e) => {
-                if (!micEnabled || !sessionRef.current) return;
-                const inputData = e.inputBuffer.getChannelData(0);
-                sessionRef.current.sendRealtimeInput({ media: createBlob(inputData) });
-              };
-              source.connect(scriptProcessor);
-              scriptProcessor.connect(audioContextInRef.current!.destination);
-            },
+            onopen: () => console.log("Strategic voice line secured."),
             onmessage: async (message: LiveServerMessage) => {
               if (message.serverContent?.interrupted) stopAllAudio();
               const base64Audio = message.serverContent?.modelTurn?.parts?.find(p => p.inlineData)?.inlineData?.data;
@@ -163,18 +151,18 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
           config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
         });
         sessionRef.current = await sessionPromise;
-      } catch (err) {
-        console.warn("Voice input unavailable. Using tactical messaging.", err);
+      } catch (e) {
+        console.warn("Microphone not available, using tactical chat fallback.");
       }
     };
 
-    init();
+    startApp();
 
     return () => {
       sessionRef.current?.close();
       streamRef.current?.getTracks().forEach(t => t.stop());
     };
-  }, [SYSTEM_INSTRUCTION, playTTS, WELCOME_TEXT]);
+  }, [SYSTEM_INSTRUCTION, WELCOME_TEXT, playTTS]);
 
   useEffect(() => { 
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -182,7 +170,7 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
 
   const handleSendText = async () => {
     const msg = textInput.trim();
-    if (!msg || status === 'connecting') return;
+    if (!msg) return;
 
     await resumeAudio();
     setTranscriptions(prev => [...prev, { text: msg, type: 'user', timestamp: Date.now() }]);
@@ -191,7 +179,7 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
     setStatus('speaking');
 
     if (!chatRef.current) {
-      setTranscriptions(prev => [...prev, { text: "Strategic line connection error. Please refresh.", type: 'model', timestamp: Date.now() }]);
+      setTranscriptions(prev => [...prev, { text: "Strategic advisor is initializing. Please re-send your situation description.", type: 'model', timestamp: Date.now() }]);
       setStatus('listening');
       return;
     }
@@ -207,18 +195,17 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
       setStreamingResponse('');
       playTTS(fullText);
     } catch (e) { 
-      console.error("Message error:", e);
-      setTranscriptions(prev => [...prev, { text: "Communication failed. Please try again.", type: 'model', timestamp: Date.now() }]);
+      console.error("Chat error:", e);
       setStatus('listening'); 
     }
   };
 
   return (
-    <div className="w-full flex flex-col h-[75vh] glass rounded-[2.5rem] overflow-hidden shadow-2xl animate-in zoom-in-95 duration-500">
+    <div className="w-full flex flex-col h-[75vh] glass rounded-[2.5rem] overflow-hidden shadow-2xl border border-white/10 animate-in fade-in zoom-in-95 duration-500">
       <div className="p-5 border-b border-white/5 flex items-center justify-between bg-slate-800/20">
         <div className="flex items-center gap-3">
-          <div className={`w-2.5 h-2.5 rounded-full ${status === 'speaking' ? 'bg-blue-400 animate-pulse' : status === 'listening' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{status}</span>
+          <div className={`w-2.5 h-2.5 rounded-full ${status === 'speaking' ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500'}`} />
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Strategist Active</span>
         </div>
         <div className="flex gap-2">
           <button 
@@ -227,23 +214,23 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
           </button>
-          <button onClick={onExit} className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors">
+          <button onClick={onExit} className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6 custom-scrollbar bg-slate-900/40">
         {transcriptions.map((t, i) => (
-          <div key={i} className={`flex ${t.type === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
-            <div className={`max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed ${t.type === 'user' ? 'bg-blue-600' : 'bg-slate-800 border border-white/5'}`}>
+          <div key={i} className={`flex ${t.type === 'user' ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-300`}>
+            <div className={`max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed shadow-sm ${t.type === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-800 border border-white/5 text-slate-200'}`}>
               {t.text}
             </div>
           </div>
         ))}
         {streamingResponse && (
-          <div className="flex justify-start animate-in fade-in">
-            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800 border border-white/5 italic text-blue-200">
+          <div className="flex justify-start">
+            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800 border border-white/5 italic text-blue-200 animate-pulse">
               {streamingResponse}
             </div>
           </div>
@@ -251,19 +238,18 @@ Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Plea
         <div ref={chatEndRef} />
       </div>
 
-      <div className="p-4 bg-slate-900/60 border-t border-white/5 flex gap-3">
+      <div className="p-4 bg-slate-900 border-t border-white/5 flex gap-3">
         <input 
           value={textInput} 
           onChange={e => setTextInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleSendText()}
-          placeholder={status === 'connecting' ? "Securing line..." : "Describe your situation..."} 
-          disabled={status === 'connecting' || !!streamingResponse}
-          className="flex-1 bg-slate-950/50 border border-white/10 rounded-xl px-5 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white transition-all disabled:opacity-50"
+          placeholder="Describe your crisis situation..." 
+          className="flex-1 bg-slate-950 border border-white/10 rounded-xl px-5 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white transition-all"
         />
         <button 
           onClick={handleSendText} 
-          disabled={!textInput.trim() || !!streamingResponse || status === 'connecting'}
-          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-all shadow-lg shadow-blue-600/20"
+          disabled={!textInput.trim() || !!streamingResponse}
+          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-30 transition-all shadow-lg shadow-blue-600/20"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         </button>
