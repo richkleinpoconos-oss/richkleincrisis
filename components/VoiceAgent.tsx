@@ -25,7 +25,6 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const streamRef = useRef<MediaStream | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  
   const hasWelcomedRef = useRef(false);
 
   const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How can I assist with your strategic situation?";
@@ -33,8 +32,7 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const SYSTEM_INSTRUCTION = useMemo(() => `
 Identity: You are the AI Crisis Strategist for Rich Klein Crisis Management.
 Tone: Calm, professional, elite, and highly strategic.
-Knowledge: Rich Klein has 40 years of experience in PR and Journalism. He splits his time between Pennsylvania and Italy.
-Core Principles: "Organizations that survive crises with their reputations intact are those that treated 'Before' as seriously as 'During.'"
+Knowledge: Rich Klein has 40 years of experience in PR and Journalism. 
 Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure assessment."
 Language: All responses must be in ${language}.
 `, [language]);
@@ -88,91 +86,85 @@ Language: All responses must be in ${language}.
   const initialize = useCallback(async () => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      console.error("API Key missing at runtime.");
+      console.error("No API Key detected.");
+      setStatus('listening');
       return;
     }
 
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // Initialize Chat first as it's the most reliable fallback
+      // 1. Setup Chat (Solid Fallback)
       chatRef.current = ai.chats.create({ 
         model: 'gemini-3-flash-preview', 
         config: { systemInstruction: SYSTEM_INSTRUCTION } 
       });
 
-      // Prepare Audio Contexts
+      // 2. Prep Audio
       if (!audioContextInRef.current) audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
       if (!audioContextOutRef.current) audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
-      
-      // Request Mic for Live Session
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
 
-      const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
-        callbacks: {
-          onopen: () => {
-            console.log("Live connection opened");
-            setStatus('listening');
-            
-            const source = audioContextInRef.current!.createMediaStreamSource(stream);
-            const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
-            
-            scriptProcessor.onaudioprocess = (e) => {
-              if (!micEnabled || !sessionRef.current) return;
-              const inputData = e.inputBuffer.getChannelData(0);
-              sessionRef.current.sendRealtimeInput({ media: createBlob(inputData) });
-            };
-            
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContextInRef.current!.destination);
-
-            if (!hasWelcomedRef.current) {
-              setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
-              playTTS(WELCOME_TEXT);
-              hasWelcomedRef.current = true;
-            }
-          },
-          onmessage: async (message: LiveServerMessage) => {
-            if (message.serverContent?.interrupted) stopAllAudio();
-            
-            const base64Audio = message.serverContent?.modelTurn?.parts?.find(p => p.inlineData)?.inlineData?.data;
-            if (base64Audio && audioOutputEnabled && audioContextOutRef.current) {
-              const ctx = audioContextOutRef.current;
-              const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
-              const source = ctx.createBufferSource();
-              source.buffer = audioBuffer;
-              source.connect(ctx.destination);
-              const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
-              source.start(startTime);
-              nextStartTimeRef.current = startTime + audioBuffer.duration;
-              sourcesRef.current.add(source);
-              setStatus('speaking');
-              source.onended = () => {
-                sourcesRef.current.delete(source);
-                if (sourcesRef.current.size === 0) setStatus('listening');
-              };
-            }
-          },
-          onerror: (e) => console.error("Live session error:", e),
-          onclose: () => {
-            console.warn("Live session closed");
-            setStatus('connecting');
-          }
-        },
-        config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
-      });
-
-      sessionRef.current = await sessionPromise;
-    } catch (e) { 
-      console.error("Initialization failed:", e);
-      // Even if Live fails, chatRef is hopefully set up
+      // 3. Immediately unlock UI
       setStatus('listening');
-      if (!hasWelcomedRef.current) {
-         setTranscriptions([{ text: "System: Tactical advisor ready via message. (Voice initialization limited)", type: 'model', timestamp: Date.now() }]);
-         hasWelcomedRef.current = true;
+
+      // 4. Try to setup Voice (Live)
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = stream;
+
+        const sessionPromise = ai.live.connect({
+          model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+          callbacks: {
+            onopen: () => {
+              console.log("Strategic Voice Link: Open");
+              const source = audioContextInRef.current!.createMediaStreamSource(stream);
+              const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
+              scriptProcessor.onaudioprocess = (e) => {
+                if (!micEnabled || !sessionRef.current) return;
+                const inputData = e.inputBuffer.getChannelData(0);
+                sessionRef.current.sendRealtimeInput({ media: createBlob(inputData) });
+              };
+              source.connect(scriptProcessor);
+              scriptProcessor.connect(audioContextInRef.current!.destination);
+            },
+            onmessage: async (message: LiveServerMessage) => {
+              if (message.serverContent?.interrupted) stopAllAudio();
+              const base64Audio = message.serverContent?.modelTurn?.parts?.find(p => p.inlineData)?.inlineData?.data;
+              if (base64Audio && audioOutputEnabled && audioContextOutRef.current) {
+                const ctx = audioContextOutRef.current;
+                const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
+                const source = ctx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(ctx.destination);
+                const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
+                source.start(startTime);
+                nextStartTimeRef.current = startTime + audioBuffer.duration;
+                sourcesRef.current.add(source);
+                setStatus('speaking');
+                source.onended = () => {
+                  sourcesRef.current.delete(source);
+                  if (sourcesRef.current.size === 0) setStatus('listening');
+                };
+              }
+            }
+          },
+          config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
+        });
+        sessionRef.current = await sessionPromise;
+      } catch (err) {
+        console.warn("Voice initialization limited, falling back to secure messaging:", err);
       }
+
+      // 5. Welcome
+      if (!hasWelcomedRef.current) {
+        setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
+        playTTS(WELCOME_TEXT);
+        hasWelcomedRef.current = true;
+      }
+
+    } catch (e) { 
+      console.error("Critical System Failure:", e);
+      setStatus('listening');
     }
   }, [SYSTEM_INSTRUCTION, micEnabled, WELCOME_TEXT, audioOutputEnabled, stopAllAudio, playTTS]);
 
@@ -185,28 +177,24 @@ Language: All responses must be in ${language}.
   }, [initialize]);
 
   useEffect(() => { 
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [transcriptions, streamingResponse]);
 
   const handleSendText = async () => {
     const msg = textInput.trim();
     if (!msg) return;
 
-    // Display user message immediately
     setTranscriptions(prev => [...prev, { text: msg, type: 'user', timestamp: Date.now() }]);
     setTextInput('');
     stopAllAudio();
-    setStatus('speaking');
 
     if (!chatRef.current) {
-      setTranscriptions(prev => [...prev, { text: "Error: Strategic line not fully initialized. Please wait a moment.", type: 'model', timestamp: Date.now() }]);
-      setStatus('listening');
+      setTranscriptions(prev => [...prev, { text: "Strategic advisor connecting... please repeat your message in 5 seconds.", type: 'model', timestamp: Date.now() }]);
       return;
     }
 
     try {
+      setStatus('speaking');
       const stream = await chatRef.current.sendMessageStream({ message: msg });
       let fullText = '';
       for await (const chunk of stream) { 
@@ -217,8 +205,7 @@ Language: All responses must be in ${language}.
       setStreamingResponse('');
       playTTS(fullText);
     } catch (e) { 
-      console.error("Chat send failed:", e);
-      setTranscriptions(prev => [...prev, { text: "I encountered a technical interruption. Please try your message again.", type: 'model', timestamp: Date.now() }]);
+      console.error("Message delivery failed:", e);
       setStatus('listening'); 
     }
   };
@@ -234,7 +221,6 @@ Language: All responses must be in ${language}.
           <button 
             onClick={() => setMicEnabled(!micEnabled)} 
             className={`p-2 rounded-xl transition-all ${micEnabled ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-700 text-slate-500'}`}
-            title={micEnabled ? "Mute Microphone" : "Unmute Microphone"}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
           </button>
@@ -247,7 +233,7 @@ Language: All responses must be in ${language}.
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6 custom-scrollbar">
         {transcriptions.map((t, i) => (
           <div key={i} className={`flex ${t.type === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
-            <div className={`max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed ${t.type === 'user' ? 'bg-blue-600 shadow-lg shadow-blue-900/20' : 'bg-slate-800 border border-white/5 shadow-inner'}`}>
+            <div className={`max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed ${t.type === 'user' ? 'bg-blue-600' : 'bg-slate-800 border border-white/5'}`}>
               {t.text}
             </div>
           </div>
@@ -262,23 +248,22 @@ Language: All responses must be in ${language}.
         <div ref={chatEndRef} />
       </div>
 
-      <div className="p-4 bg-slate-900/60 border-t border-white/5 flex gap-3 backdrop-blur-sm">
+      <div className="p-4 bg-slate-900/60 border-t border-white/5 flex gap-3">
         <input 
           value={textInput} 
           onChange={e => setTextInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && !streamingResponse && handleSendText()}
-          placeholder={status === 'connecting' ? "Connecting to strategic line..." : "Type strategic inquiry..."} 
+          placeholder={status === 'connecting' ? "Securing strategic line..." : "Describe the situation..."} 
           disabled={status === 'connecting' || !!streamingResponse}
-          className="flex-1 bg-slate-950/50 border border-white/10 rounded-xl px-5 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white placeholder-slate-500 transition-all disabled:opacity-50"
+          className="flex-1 bg-slate-950/50 border border-white/10 rounded-xl px-5 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white disabled:opacity-50"
         />
         <button 
           onClick={handleSendText} 
-          disabled={!textInput.trim() || !!streamingResponse}
-          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:bg-slate-700 disabled:opacity-50 transition-all shadow-lg shadow-blue-600/20"
+          disabled={!textInput.trim() || !!streamingResponse || status === 'connecting'}
+          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-all"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         </button>
       </div>
     </div>
   );
-};
