@@ -1,4 +1,4 @@
-mport React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Chat } from '@google/genai';
 import { Transcription } from '../types';
 import { decode, decodeAudioData, createBlob } from '../services/audioUtils';
@@ -17,7 +17,6 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const [textInput, setTextInput] = useState('');
   const [language, setLanguage] = useState('English');
   
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const sessionRef = useRef<any>(null);
   const chatRef = useRef<Chat | null>(null);
   const audioContextInRef = useRef<AudioContext | null>(null);
@@ -37,7 +36,7 @@ Identity: You are the AI Crisis Strategist for Rich Klein Crisis Management.
 Tone: Calm, professional, elite, and highly strategic.
 Knowledge: Rich Klein has 40 years of experience in PR and Journalism. He splits his time between Pennsylvania and Italy.
 Protocol: If a crisis is active, immediately prioritize the "ACTIVE CRISIS PROTOCOL": "I understand the sensitivity. Please immediately connect via WhatsApp or email: rich@richkleincrisis.com for a secure, rapid assessment."
-Context: Preparation is key. " organizations that survive crises with their reputations intact are those that treated 'Before' as seriously as 'During.'"
+Context: Preparation is key. "Organizations that survive crises with their reputations intact are those that treated 'Before' as seriously as 'During.'"
 Language: All responses must be in ${language}.
 `, [language]);
 
@@ -53,7 +52,10 @@ Language: All responses must be in ${language}.
   const playTTS = async (text: string) => {
     if (!audioOutputEnabled) return;
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) return;
+
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
@@ -88,9 +90,14 @@ Language: All responses must be in ${language}.
   };
 
   const initialize = useCallback(async () => {
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      console.error("API Key is missing from environment.");
+      return;
+    }
+
     try {
-      // Use the key directly without a blocking existence check
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      const ai = new GoogleGenAI({ apiKey });
       chatRef.current = ai.chats.create({ 
         model: 'gemini-3-flash-preview', 
         config: { systemInstruction: SYSTEM_INSTRUCTION } 
@@ -146,15 +153,17 @@ Language: All responses must be in ${language}.
                 if (sourcesRef.current.size === 0) setStatus('listening');
               };
             }
-          }
+          },
+          onerror: (e) => console.error("Live session error:", e),
+          onclose: () => setStatus('connecting')
         },
         config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
       });
       sessionRef.current = await sessionPromise;
     } catch (e) { 
-      console.error("Init Error", e); 
+      console.error("Initialization failed:", e); 
     }
-  }, [SYSTEM_INSTRUCTION, micEnabled, WELCOME_TEXT, audioOutputEnabled]);
+  }, [SYSTEM_INSTRUCTION, micEnabled, WELCOME_TEXT, audioOutputEnabled, stopAllAudio]);
 
   useEffect(() => { 
     initialize(); 
