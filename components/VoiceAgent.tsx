@@ -15,7 +15,6 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const [transcriptions, setTranscriptions] = useState<Transcription[]>([]);
   const [streamingResponse, setStreamingResponse] = useState('');
   const [textInput, setTextInput] = useState('');
-  const [language, setLanguage] = useState('English');
   
   const sessionRef = useRef<any>(null);
   const chatRef = useRef<Chat | null>(null);
@@ -25,17 +24,17 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const streamRef = useRef<MediaStream | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const hasWelcomedRef = useRef(false);
+  const hasInitializedRef = useRef(false);
 
-  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How can I assist with your strategic situation?";
+  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. I am your strategic advisor. How can I assist with your situation today?";
 
   const SYSTEM_INSTRUCTION = useMemo(() => `
 Identity: You are the AI Crisis Strategist for Rich Klein Crisis Management.
-Tone: Calm, professional, elite, and highly strategic.
+Tone: Calm, professional, elite, and highly strategic. Use the language the user speaks.
 Knowledge: Rich Klein has 40 years of experience in PR and Journalism. 
+Core Philosophy: "Organizations that survive crises with their reputations intact are those that treated 'Before' as seriously as 'During.'"
 Protocol: If a crisis is active, prioritize: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure assessment."
-Language: All responses must be in ${language}.
-`, [language]);
+`, []);
 
   const stopAllAudio = useCallback(() => {
     sourcesRef.current.forEach(s => {
@@ -47,9 +46,11 @@ Language: All responses must be in ${language}.
   }, []);
 
   const playTTS = useCallback(async (text: string) => {
-    if (!audioOutputEnabled || !process.env.API_KEY) return;
+    const apiKey = process.env.API_KEY;
+    if (!audioOutputEnabled || !apiKey) return;
+    
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
@@ -83,32 +84,42 @@ Language: All responses must be in ${language}.
     }
   }, [audioOutputEnabled]);
 
-  const initialize = useCallback(async () => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      console.error("No API Key detected.");
-      setStatus('listening');
-      return;
-    }
+  // Main system initialization
+  useEffect(() => {
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
 
-    try {
+    const startApp = async () => {
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) {
+        console.error("Critical: API Key not found.");
+        setStatus('listening');
+        setTranscriptions([{ text: "System: API Key missing. Please check configuration.", type: 'model', timestamp: Date.now() }]);
+        return;
+      }
+
       const ai = new GoogleGenAI({ apiKey });
-      
-      // 1. Setup Chat (Solid Fallback)
+
+      // 1. Setup Chat immediately to unlock text engagement
       chatRef.current = ai.chats.create({ 
         model: 'gemini-3-flash-preview', 
         config: { systemInstruction: SYSTEM_INSTRUCTION } 
       });
-
-      // 2. Prep Audio
-      if (!audioContextInRef.current) audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
-      if (!audioContextOutRef.current) audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
-
-      // 3. Immediately unlock UI
+      
+      // Unlock UI
       setStatus('listening');
+      setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
+      
+      // Play Welcome Audio
+      if (audioOutputEnabled) {
+        if (!audioContextOutRef.current) audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
+        playTTS(WELCOME_TEXT);
+      }
 
-      // 4. Try to setup Voice (Live)
+      // 2. Setup Voice in background
       try {
+        if (!audioContextInRef.current) audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
+        
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         streamRef.current = stream;
 
@@ -116,7 +127,7 @@ Language: All responses must be in ${language}.
           model: 'gemini-2.5-flash-native-audio-preview-12-2025',
           callbacks: {
             onopen: () => {
-              console.log("Strategic Voice Link: Open");
+              console.log("Voice channel secured.");
               const source = audioContextInRef.current!.createMediaStreamSource(stream);
               const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
               scriptProcessor.onaudioprocess = (e) => {
@@ -146,35 +157,24 @@ Language: All responses must be in ${language}.
                   if (sourcesRef.current.size === 0) setStatus('listening');
                 };
               }
-            }
+            },
+            onclose: () => console.log("Voice channel closed.")
           },
           config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
         });
         sessionRef.current = await sessionPromise;
-      } catch (err) {
-        console.warn("Voice initialization limited, falling back to secure messaging:", err);
+      } catch (voiceErr) {
+        console.warn("Microphone or Voice service unavailable. Text fallback active.", voiceErr);
       }
+    };
 
-      // 5. Welcome
-      if (!hasWelcomedRef.current) {
-        setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
-        playTTS(WELCOME_TEXT);
-        hasWelcomedRef.current = true;
-      }
+    startApp();
 
-    } catch (e) { 
-      console.error("Critical System Failure:", e);
-      setStatus('listening');
-    }
-  }, [SYSTEM_INSTRUCTION, micEnabled, WELCOME_TEXT, audioOutputEnabled, stopAllAudio, playTTS]);
-
-  useEffect(() => { 
-    initialize(); 
-    return () => { 
-      sessionRef.current?.close(); 
+    return () => {
+      sessionRef.current?.close();
       streamRef.current?.getTracks().forEach(t => t.stop());
-    }; 
-  }, [initialize]);
+    };
+  }, [SYSTEM_INSTRUCTION, playTTS]); // WELCOME_TEXT is stable
 
   useEffect(() => { 
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -182,19 +182,22 @@ Language: All responses must be in ${language}.
 
   const handleSendText = async () => {
     const msg = textInput.trim();
-    if (!msg) return;
+    if (!msg || status === 'connecting') return;
 
+    // 1. Immediate UI update
     setTranscriptions(prev => [...prev, { text: msg, type: 'user', timestamp: Date.now() }]);
     setTextInput('');
     stopAllAudio();
+    setStatus('speaking');
 
+    // 2. Engagement check
     if (!chatRef.current) {
-      setTranscriptions(prev => [...prev, { text: "Strategic advisor connecting... please repeat your message in 5 seconds.", type: 'model', timestamp: Date.now() }]);
+      setTranscriptions(prev => [...prev, { text: "Strategic advisor initialization failed. Please refresh the page.", type: 'model', timestamp: Date.now() }]);
+      setStatus('listening');
       return;
     }
 
     try {
-      setStatus('speaking');
       const stream = await chatRef.current.sendMessageStream({ message: msg });
       let fullText = '';
       for await (const chunk of stream) { 
@@ -205,7 +208,8 @@ Language: All responses must be in ${language}.
       setStreamingResponse('');
       playTTS(fullText);
     } catch (e) { 
-      console.error("Message delivery failed:", e);
+      console.error("Message error:", e);
+      setTranscriptions(prev => [...prev, { text: "Communication interrupted. Please try again.", type: 'model', timestamp: Date.now() }]);
       setStatus('listening'); 
     }
   };
@@ -224,7 +228,7 @@ Language: All responses must be in ${language}.
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
           </button>
-          <button onClick={onExit} className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20">
+          <button onClick={onExit} className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
           </button>
         </div>
@@ -252,18 +256,19 @@ Language: All responses must be in ${language}.
         <input 
           value={textInput} 
           onChange={e => setTextInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && !streamingResponse && handleSendText()}
-          placeholder={status === 'connecting' ? "Securing strategic line..." : "Describe the situation..."} 
+          onKeyDown={e => e.key === 'Enter' && handleSendText()}
+          placeholder={status === 'connecting' ? "Initializing tactical advisor..." : "Describe the crisis situation..."} 
           disabled={status === 'connecting' || !!streamingResponse}
-          className="flex-1 bg-slate-950/50 border border-white/10 rounded-xl px-5 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white disabled:opacity-50"
+          className="flex-1 bg-slate-950/50 border border-white/10 rounded-xl px-5 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white disabled:opacity-50 transition-all"
         />
         <button 
           onClick={handleSendText} 
           disabled={!textInput.trim() || !!streamingResponse || status === 'connecting'}
-          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-all"
+          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-50 transition-all shadow-lg shadow-blue-600/20"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         </button>
       </div>
     </div>
   );
+};
