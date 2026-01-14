@@ -31,11 +31,11 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How can I help you today?";
 
   const SYSTEM_INSTRUCTION = useMemo(() => `
-Identity: You are the AI Crisis Strategist for Rich Klein Crisis Management.
-Role: Provide elite strategic counsel for active reputation, media, and business crises.
-Tone: Calm, professional, authoritative, and strategic. 
-Background: You represent Rich Klein, leveraging 40 years of combined Journalism and PR experience.
-Protocol: If a situation is highly sensitive, advise: "I understand the sensitivity. For a secure and confidential assessment, please connect directly via WhatsApp or email: rich@richkleincrisis.com."
+Identity: You are the lead AI Crisis Strategist for Rich Klein Crisis Management.
+Role: Provide immediate strategic counsel for organizations facing active reputation or business crises.
+Tone: Calm, authoritative, analytical, and highly professional.
+Background: Leveraging 40 years of Journalism and PR experience.
+Privacy: If confidentiality is paramount, state: "For a secure, end-to-end encrypted assessment, please email rich@richkleincrisis.com directly."
 `, []);
 
   const stopAllAudio = useCallback(() => {
@@ -54,12 +54,11 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
   }, []);
 
   const playTTS = useCallback(async (text: string) => {
-    const apiKey = process.env.API_KEY;
-    if (!audioOutputEnabled || !apiKey || apiKey === 'undefined') return;
+    if (!audioOutputEnabled) return;
     
     setStatus('buffering');
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text }] }],
@@ -85,12 +84,13 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
         const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
         source.start(startTime);
         nextStartTimeRef.current = startTime + audioBuffer.duration;
+        // Fix: Use sourcesRef.current to access the Set instance
         sourcesRef.current.add(source);
       } else {
         setStatus('listening');
       }
     } catch (e) { 
-      console.warn("TTS Audio fallback triggered.");
+      console.warn("Audio sync failed, maintaining tactical feed.");
       setStatus('listening');
     }
   }, [audioOutputEnabled, resumeAudio]);
@@ -98,7 +98,7 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
   const initStrategicEngine = useCallback(() => {
     const apiKey = process.env.API_KEY;
     if (!apiKey || apiKey === 'undefined') {
-      console.error("Critical: API Key not detected in environment.");
+      console.error("Environment Configuration Error: API Key missing.");
       return false;
     }
     try {
@@ -109,7 +109,7 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
       });
       return true;
     } catch (e) {
-      console.error("AI Engine initialization failure:", e);
+      console.error("AI Core Initialization Error:", e);
       return false;
     }
   }, [SYSTEM_INSTRUCTION]);
@@ -118,19 +118,16 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
     if (initialized.current) return;
     initialized.current = true;
 
-    // Greeting is the baseline for the interaction
     setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
     
-    const engineReady = initStrategicEngine();
-    
-    if (engineReady) {
-      if (!audioContextInRef.current) audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
-      if (!audioContextOutRef.current) audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
+    if (initStrategicEngine()) {
+      audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
+      audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
       
-      playTTS(WELCOME_TEXT);
+      setTimeout(() => playTTS(WELCOME_TEXT), 300);
 
       if (micEnabled) {
-        const setupVoiceLine = async () => {
+        const establishSecureLine = async () => {
           try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
@@ -160,16 +157,17 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
                     };
                   }
                 },
-                onerror: (e) => setStatus('listening')
+                onerror: () => setStatus('listening')
               },
               config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
             });
             sessionRef.current = await sessionPromise;
           } catch (e) {
+            console.error("Secure voice channel failed.");
             setStatus('listening');
           }
         };
-        setupVoiceLine();
+        establishSecureLine();
       } else {
         setStatus('listening');
       }
@@ -196,11 +194,13 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
     setTextInput('');
     stopAllAudio();
     
-    // Auto-recovery for the engine if it was dropped
-    if (!chatRef.current && !initStrategicEngine()) {
-      setTranscriptions(prev => [...prev, { text: "Strategic advisor line is offline. Please check your credentials.", type: 'model', timestamp: Date.now() }]);
-      setStatus('listening');
-      return;
+    // Auto-recovery for engine link
+    if (!chatRef.current) {
+      if (!initStrategicEngine()) {
+        setTranscriptions(prev => [...prev, { text: "Strategic Link Failure. Please ensure environment credentials are set.", type: 'model', timestamp: Date.now() }]);
+        setStatus('listening');
+        return;
+      }
     }
 
     setStatus('processing');
@@ -216,37 +216,63 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
       setStreamingResponse('');
       playTTS(fullText);
     } catch (e) { 
-      console.error("Communication failure:", e);
-      setTranscriptions(prev => [...prev, { text: "Tactical connection interrupted. Re-establishing...", type: 'model', timestamp: Date.now() }]);
+      console.error("Tactical Feed Dropped:", e);
+      setTranscriptions(prev => [...prev, { text: "Communication line interrupted. Re-syncing...", type: 'model', timestamp: Date.now() }]);
       setStatus('listening'); 
     }
   };
 
-  const getStatusDisplay = (s: AgentStatus) => {
-    switch (s) {
-      case 'connecting': return { label: 'Securing Line', color: 'bg-amber-500', pulse: true };
-      case 'listening': return { label: 'Strategist Active', color: 'bg-emerald-500', pulse: false };
-      case 'processing': return { label: 'Analyzing Situation', color: 'bg-blue-500', pulse: true };
-      case 'awaiting': return { label: 'Formulating Strategy', color: 'bg-indigo-500', pulse: true };
-      case 'buffering': return { label: 'Syncing Secure Stream', color: 'bg-violet-500', pulse: true };
-      case 'speaking': return { label: 'Strategist Speaking', color: 'bg-cyan-400', pulse: true };
+  const renderStatusIcon = () => {
+    switch (status) {
+      case 'connecting':
+        return <div className="w-3.5 h-3.5 rounded-full bg-amber-500 animate-pulse" />;
+      case 'listening':
+        return <div className="w-3.5 h-3.5 rounded-full bg-emerald-500" />;
+      case 'processing':
+        return <div className="w-3.5 h-3.5 rounded-full bg-blue-500 animate-pulse-fast" />;
+      case 'awaiting':
+        return (
+          <div className="flex gap-0.5">
+            <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 wave-dot" />
+            <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 wave-dot" />
+            <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 wave-dot" />
+          </div>
+        );
+      case 'buffering':
+        return <div className="w-3.5 h-3.5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />;
+      case 'speaking':
+        return (
+          <div className="flex items-end gap-0.5 h-4">
+            <div className="w-1 bg-cyan-400 bar" />
+            <div className="w-1 bg-cyan-400 bar" />
+            <div className="w-1 bg-cyan-400 bar" />
+          </div>
+        );
     }
   };
 
-  const currentStatus = getStatusDisplay(status);
+  const statusMap = {
+    connecting: { label: 'Securing Line', color: 'text-amber-500' },
+    listening: { label: 'Strategist Active', color: 'text-emerald-500' },
+    processing: { label: 'Analyzing Situation', color: 'text-blue-500' },
+    awaiting: { label: 'Formulating Strategy', color: 'text-indigo-500' },
+    buffering: { label: 'Syncing Secure Stream', color: 'text-violet-500' },
+    speaking: { label: 'Strategist Speaking', color: 'text-cyan-400' }
+  };
+
+  const currentStatus = statusMap[status];
 
   return (
     <div className="w-full flex flex-col h-[75vh] glass rounded-[2.5rem] overflow-hidden shadow-2xl border border-white/10 animate-in fade-in zoom-in-95 duration-500">
-      {/* Header with Granular Status */}
-      <div className="p-5 border-b border-white/5 flex items-center justify-between bg-slate-800/20">
+      {/* Dynamic Header */}
+      <div className="p-5 border-b border-white/5 flex items-center justify-between bg-slate-800/30">
         <div className="flex items-center gap-4">
-          <div className="relative flex items-center justify-center">
-            <div className={`w-3.5 h-3.5 rounded-full ${currentStatus.color} ${currentStatus.pulse ? 'animate-ping' : ''} absolute`} />
-            <div className={`w-3.5 h-3.5 rounded-full ${currentStatus.color} relative z-10 shadow-[0_0_12px_rgba(255,255,255,0.2)]`} />
+          <div className="w-8 flex items-center justify-center">
+            {renderStatusIcon()}
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Strategic Feed</span>
-            <span className={`text-sm font-bold ${status === 'speaking' ? 'text-cyan-400' : 'text-white'} transition-colors duration-300`}>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tactical Feed</span>
+            <span className={`text-sm font-bold ${currentStatus.color} transition-colors duration-300`}>
               {currentStatus.label}
             </span>
           </div>
@@ -264,7 +290,7 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
         </div>
       </div>
 
-      {/* Message Feed */}
+      {/* Strategic Feed */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6 custom-scrollbar bg-slate-900/40">
         {transcriptions.map((t, i) => (
           <div key={i} className={`flex ${t.type === 'user' ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-300`}>
@@ -275,7 +301,7 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
         ))}
         {streamingResponse && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800/60 border border-white/5 italic text-cyan-100 animate-pulse">
+            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800/60 border border-white/5 italic text-cyan-200 animate-pulse">
               {streamingResponse}
             </div>
           </div>
@@ -283,26 +309,26 @@ Protocol: If a situation is highly sensitive, advise: "I understand the sensitiv
         <div ref={chatEndRef} />
       </div>
 
-      {/* Tactical Input */}
+      {/* Input Module */}
       <div className="p-4 bg-slate-900 border-t border-white/5 flex gap-3">
         <div className="relative flex-1">
           <input 
             value={textInput} 
             onChange={e => setTextInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSendText()}
-            placeholder="Describe your crisis situation..." 
-            className="w-full bg-slate-950 border border-white/10 rounded-xl px-5 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white transition-all placeholder:text-slate-600"
+            placeholder="Outline the crisis details here..." 
+            className="w-full bg-slate-950 border border-white/10 rounded-xl px-5 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-white transition-all placeholder:text-slate-600"
           />
         </div>
         <button 
           onClick={handleSendText} 
           disabled={!textInput.trim() || !!streamingResponse || status === 'processing' || status === 'awaiting'}
-          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-30 disabled:hover:bg-blue-600 transition-all shadow-lg shadow-blue-600/20 text-white flex items-center justify-center min-w-[50px]"
+          className="px-6 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-30 disabled:hover:bg-blue-600 transition-all shadow-lg shadow-blue-600/20 text-white flex items-center justify-center font-bold min-w-[100px]"
         >
           {status === 'processing' || status === 'awaiting' ? (
               <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
           ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              <span>SEND</span>
           )}
         </button>
       </div>
