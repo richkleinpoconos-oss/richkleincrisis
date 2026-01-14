@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Chat } from '@google/genai';
 import { Transcription } from '../types';
-import { decode, decodeAudioData, createBlob } from '../services/audioUtils';
+import { decode, decodeAudioData } from '../services/audioUtils';
 
 interface VoiceAgentProps {
   onExit: () => void;
@@ -26,14 +26,13 @@ export const VoiceAgent: React.FC<VoiceAgentProps> = ({ onExit, preferredMode })
   const chatEndRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
 
-  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How can I assist with your strategic situation today?";
+  const WELCOME_TEXT = "Welcome to Rich Klein Crisis Management. How confident are you now that this will work?";
 
   const SYSTEM_INSTRUCTION = useMemo(() => `
 Identity: You are the AI Crisis Strategist for Rich Klein Crisis Management.
-Tone: Calm, professional, elite, and highly strategic.
+Tone: Calm, professional, elite, and highly strategic. Respond in the user's language.
 Knowledge: Rich Klein has 40 years of experience in PR and Journalism.
-Core Mission: Provide immediate, high-level strategic advice for active crises.
-Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure assessment."
+Protocol: If a situation is sensitive, offer: "I understand the sensitivity. Please connect via WhatsApp or email: rich@richkleincrisis.com for a secure assessment."
 `, []);
 
   const stopAllAudio = useCallback(() => {
@@ -53,7 +52,7 @@ Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity.
 
   const playTTS = useCallback(async (text: string) => {
     const apiKey = process.env.API_KEY;
-    if (!audioOutputEnabled || !apiKey) return;
+    if (!audioOutputEnabled || !apiKey || apiKey === 'undefined') return;
     
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -85,7 +84,7 @@ Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity.
         sourcesRef.current.add(source);
       }
     } catch (e) { 
-      console.error("Audio engine fallback:", e);
+      console.error("Audio playback error:", e);
       setStatus('listening');
     }
   }, [audioOutputEnabled, resumeAudio]);
@@ -94,75 +93,74 @@ Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity.
     if (hasInitializedRef.current) return;
     hasInitializedRef.current = true;
 
-    const startApp = async () => {
-      const apiKey = process.env.API_KEY;
-      
-      // Unlock UI immediately
-      setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
-      setStatus('listening');
+    const apiKey = process.env.API_KEY;
+    
+    // 1. Immediate UI Setup
+    setTranscriptions([{ text: WELCOME_TEXT, type: 'model', timestamp: Date.now() }]);
 
-      if (!apiKey) return;
-
+    // 2. Critical Engine Initialization (No Await on Mic yet)
+    if (apiKey && apiKey !== 'undefined') {
       const ai = new GoogleGenAI({ apiKey });
-      
-      // 1. Warm up the chat engine
       chatRef.current = ai.chats.create({ 
-        model: 'gemini-3-flash-preview', 
+        model: 'gemini-3-pro-preview', 
         config: { systemInstruction: SYSTEM_INSTRUCTION } 
       });
+      
+      // Setup audio contexts immediately
+      if (!audioContextInRef.current) audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
+      if (!audioContextOutRef.current) audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
 
-      // 2. Prepare audio contexts
-      audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
-      audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
-
-      // 3. Play Greeting
+      // Try to play initial greeting TTS
       playTTS(WELCOME_TEXT);
 
-      // 4. Background Voice Session
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        streamRef.current = stream;
-
-        const sessionPromise = ai.live.connect({
-          model: 'gemini-2.5-flash-native-audio-preview-12-2025',
-          callbacks: {
-            onopen: () => console.log("Strategic voice line secured."),
-            onmessage: async (message: LiveServerMessage) => {
-              if (message.serverContent?.interrupted) stopAllAudio();
-              const base64Audio = message.serverContent?.modelTurn?.parts?.find(p => p.inlineData)?.inlineData?.data;
-              if (base64Audio && audioOutputEnabled && audioContextOutRef.current) {
-                const ctx = audioContextOutRef.current;
-                const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
-                const source = ctx.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(ctx.destination);
-                const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
-                source.start(startTime);
-                nextStartTimeRef.current = startTime + audioBuffer.duration;
-                sourcesRef.current.add(source);
-                setStatus('speaking');
-                source.onended = () => {
-                  sourcesRef.current.delete(source);
-                  if (sourcesRef.current.size === 0) setStatus('listening');
-                };
+      // 3. Background Async Voice Session (Mic Request)
+      const setupLiveSession = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          streamRef.current = stream;
+          const sessionPromise = ai.live.connect({
+            model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+            callbacks: {
+              onopen: () => console.log("Voice line secured."),
+              onmessage: async (message: LiveServerMessage) => {
+                if (message.serverContent?.interrupted) stopAllAudio();
+                const base64Audio = message.serverContent?.modelTurn?.parts?.find(p => p.inlineData)?.inlineData?.data;
+                if (base64Audio && audioOutputEnabled && audioContextOutRef.current) {
+                  const ctx = audioContextOutRef.current;
+                  const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
+                  const source = ctx.createBufferSource();
+                  source.buffer = audioBuffer;
+                  source.connect(ctx.destination);
+                  const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
+                  source.start(startTime);
+                  nextStartTimeRef.current = startTime + audioBuffer.duration;
+                  sourcesRef.current.add(source);
+                  setStatus('speaking');
+                  source.onended = () => {
+                    sourcesRef.current.delete(source);
+                    if (sourcesRef.current.size === 0) setStatus('listening');
+                  };
+                }
               }
-            }
-          },
-          config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
-        });
-        sessionRef.current = await sessionPromise;
-      } catch (e) {
-        console.warn("Microphone not available, using tactical chat fallback.");
-      }
-    };
+            },
+            config: { responseModalities: [Modality.AUDIO], systemInstruction: SYSTEM_INSTRUCTION }
+          });
+          sessionRef.current = await sessionPromise;
+        } catch (e) {
+          console.warn("Microphone not available, tactical chat mode active.");
+        }
+      };
 
-    startApp();
+      setupLiveSession();
+    } else {
+      setTranscriptions(prev => [...prev, { text: "[SYSTEM ERROR: Strategic line connection unavailable. Please check API Key configuration.]", type: 'model', timestamp: Date.now() }]);
+    }
 
     return () => {
       sessionRef.current?.close();
       streamRef.current?.getTracks().forEach(t => t.stop());
     };
-  }, [SYSTEM_INSTRUCTION, WELCOME_TEXT, playTTS]);
+  }, [SYSTEM_INSTRUCTION, WELCOME_TEXT, stopAllAudio, audioOutputEnabled, playTTS]);
 
   useEffect(() => { 
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -172,14 +170,16 @@ Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity.
     const msg = textInput.trim();
     if (!msg) return;
 
+    // Explicitly resume audio on first user action to bypass browser policies
     await resumeAudio();
+    
     setTranscriptions(prev => [...prev, { text: msg, type: 'user', timestamp: Date.now() }]);
     setTextInput('');
     stopAllAudio();
     setStatus('speaking');
 
     if (!chatRef.current) {
-      setTranscriptions(prev => [...prev, { text: "Strategic advisor is initializing. Please re-send your situation description.", type: 'model', timestamp: Date.now() }]);
+      setTranscriptions(prev => [...prev, { text: "Strategic advisor line is offline or still initializing. If this persists, check your connection.", type: 'model', timestamp: Date.now() }]);
       setStatus('listening');
       return;
     }
@@ -195,13 +195,14 @@ Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity.
       setStreamingResponse('');
       playTTS(fullText);
     } catch (e) { 
-      console.error("Chat error:", e);
+      console.error("Chat failure:", e);
+      setTranscriptions(prev => [...prev, { text: "Tactical communication interrupted. Please check your network and try again.", type: 'model', timestamp: Date.now() }]);
       setStatus('listening'); 
     }
   };
 
   return (
-    <div className="w-full flex flex-col h-[75vh] glass rounded-[2.5rem] overflow-hidden shadow-2xl border border-white/10 animate-in fade-in zoom-in-95 duration-500">
+    <div className="w-full flex flex-col h-[75vh] glass rounded-[2.5rem] overflow-hidden shadow-2xl border border-white/10">
       <div className="p-5 border-b border-white/5 flex items-center justify-between bg-slate-800/20">
         <div className="flex items-center gap-3">
           <div className={`w-2.5 h-2.5 rounded-full ${status === 'speaking' ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500'}`} />
@@ -230,7 +231,7 @@ Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity.
         ))}
         {streamingResponse && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800 border border-white/5 italic text-blue-200 animate-pulse">
+            <div className="max-w-[85%] px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed bg-slate-800 border border-white/5 italic text-blue-200">
               {streamingResponse}
             </div>
           </div>
@@ -249,7 +250,7 @@ Protocol: If a crisis is sensitive/active, offer: "I understand the sensitivity.
         <button 
           onClick={handleSendText} 
           disabled={!textInput.trim() || !!streamingResponse}
-          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-30 transition-all shadow-lg shadow-blue-600/20"
+          className="p-3.5 bg-blue-600 rounded-xl hover:bg-blue-500 disabled:opacity-30 transition-all shadow-lg shadow-blue-600/20 text-white"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         </button>
